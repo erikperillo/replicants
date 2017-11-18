@@ -35,8 +35,46 @@ import os
 
 import util
 import model
+import dproc
 from config import predict as conf
 import config
+
+def predict(x, fn):
+    x = _predict_pre_proc(x)
+    x = x.reshape((1, ) + x.shape)
+    y_pred = fn(x)
+    y_pred = y_pred.reshape(y_pred.shape[2:])
+    y_pred = transf.rescale(y_pred, 8, mode="constant")
+    y_pred = unit_norm(y_pred)
+    return y_pred
+
+def load(fp):
+    x = dproc.load(fp)[0]
+    x = x.swapaxes(0, 1).swapaxes(1, 2)
+
+    #reshaping to fix max input shape if necessary
+    h, w = x.shape[:2]
+    max_h, max_w = (480, 640)
+    max_ratio = max(h/max_h, w/max_w)
+    if max_ratio > 1.0:
+        x = (255*transf.rescale(x, 1/max_ratio,
+            mode="constant")).astype("uint8")
+    return x
+
+def save_x(x, preds_dir, name):
+    fp = util.uniq_filepath(preds_dir, name + "_x", ext=".png")
+    io.imsave(fp, x.clip(0, 255).astype("uint8"))
+
+def save_y_pred(y_pred, preds_dir, name):
+    fp = util.uniq_filepath(preds_dir, name + "_y-pred", ext=".png")
+    y_pred = 255*y_pred
+    io.imsave(fp, y_pred.clip(0, 255).astype("uint8"))
+
+def save_y_true(y_true, preds_dir, name):
+    fp = util.uniq_filepath(preds_dir, name + "_y-true", ext=".png")
+    y_true = 255*y_true
+    y_true = y_true.reshape(y_true.shape[1:])
+    io.imsave(fp, y_true.clip(0, 255).astype("uint8"))
 
 def mk_preds_dir(base_dir, pattern="train"):
     """
@@ -86,12 +124,8 @@ def main():
         meta_model.set_params_from_colls()
 
         #building functions
-        load_fn = conf["load_fn"]
-        save_x_fn = conf["save_x_fn"]
-        save_pred_fn = conf["save_pred_fn"]
-        save_true_fn = conf["save_true_fn"]
         _pred_fn = meta_model.get_pred_fn(sess)
-        pred_fn = lambda x: conf["predict_fn"](x, _pred_fn)
+        pred_fn = lambda x: predict(x, _pred_fn)
 
         indexes = None
         #iterating over images doing predictions
@@ -99,9 +133,9 @@ def main():
             print("on image '{}'".format(fp))
 
             if conf["with_trues"]:
-                x, y_true = load_fn(fp)
+                x, y_true = load(fp)
             else:
-                x = load_fn(fp)
+                x = load(fp)
 
             print("\tpredicting...")
             print("\tx shape:", x.shape)
@@ -139,26 +173,14 @@ def main():
                 ext = ("." + fn.split(".")[-1]) if "." in fn else ""
 
                 #saving x
-                if save_x_fn is not None:
-                    dir_path = os.path.join(preds_dir, "x")
-                    if not os.path.isdir(dir_path):
-                        os.makedirs(dir_path)
-                    #save_x_fn(x, dir_path, name)
-                    save_x_fn(x, preds_dir, name)
+                if save_x is not None:
+                    save_x(x, preds_dir, name)
                 #saving prediction
-                if save_pred_fn is not None:
-                    dir_path = os.path.join(preds_dir, "y_pred")
-                    if not os.path.isdir(dir_path):
-                        os.makedirs(dir_path)
-                    #save_pred_fn(y_pred, dir_path, name)
-                    save_pred_fn(y_pred, preds_dir, name)
+                if save_y_pred is not None:
+                    save_y_pred(y_pred, preds_dir, name)
                 #saving ground-truth
                 if save_true_fn is not None and conf["with_trues"]:
-                    dir_path = os.path.join(preds_dir, "y_true")
-                    if not os.path.isdir(dir_path):
-                        os.makedirs(dir_path)
-                    #save_true_fn(y_true, dir_path, name)
-                    save_true_fn(y_true, preds_dir, name)
+                    save_y_true(y_true, preds_dir, name)
 
         #saving predictions
         if conf["save_tables"] and preds is not None:

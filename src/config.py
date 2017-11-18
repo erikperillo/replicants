@@ -22,90 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 """
 
-from skimage import io
-from skimage import transform as transf
-from skimage import color
-from skimage import img_as_float
-
-import tensorflow as tf
+import random
 import numpy as np
 import os
 import glob
-import json
 
 import util
 import augment
+import dproc
 import predictfuncs
-
-def _load_salicon(fp_or_fps):
-    fn = os.path.basename(fp_or_fps)
-    dn = os.path.dirname(os.path.dirname(fp_or_fps))
-    x_fp = os.path.join(dn, "images", fn)
-    y_fp = os.path.join(dn, "maps", fn)
-    x = io.imread(x_fp)
-    y = io.imread(y_fp)
-    x = x.swapaxes(2, 1).swapaxes(1, 0)
-    y = y.reshape((1, ) + y.shape)
-    return x, y
-
-def _load_judd(fp_or_fps):
-    fn = os.path.basename(fp_or_fps)
-    dn = os.path.dirname(os.path.dirname(fp_or_fps))
-    x_fp = os.path.join(dn, "stimuli", fn)
-    y_fp = glob.glob(os.path.join(dn, "fixmaps", fn.split(".")[0] + "*"))[0]
-    x = io.imread(x_fp)
-    y = io.imread(y_fp)
-    if x.ndim < 3:
-        x = np.dstack(3*(x, ))
-    x = x.swapaxes(2, 1).swapaxes(1, 0)
-    y = y.reshape((1, ) + y.shape)
-    return x, y
-
-_load = _load_judd
-
-def __pre_proc(x, y=None):
-    x = x.swapaxes(0, 1).swapaxes(1, 2)
-    y = y.swapaxes(0, 1).swapaxes(1, 2)
-
-    #converting images to float
-    x = img_as_float(x)
-    y = img_as_float(y)
-
-    #reshaping to fix max input shape if necessary
-    h, w = x.shape[:2]
-    max_h, max_w = (480, 640)
-    max_ratio = max(h/max_h, w/max_w)
-    #if max_ratio > 1.0:
-    #    x = transf.rescale(x, 1/max_ratio, mode="constant")#.astype("uint8")
-    #    y = transf.rescale(y, 1/max_ratio, mode="constant")#.astype("uint8")
-    x = transf.resize(x, (max_h, max_w), mode="constant")#.astype("uint8")
-    y = transf.resize(y, (max_h, max_w), mode="constant")#.astype("uint8")
-
-    #converting x colorspace to LAB
-    x = color.rgb2lab(x)
-
-    #preparing shapes to be divisable by 2^3
-    h, w = x.shape[:2]
-    x = x[h%8:, w%8:]
-    y = y[h%8:, w%8:]
-    #reshaping y
-    y = transf.resize(y, (h//8, w//8), mode="constant")
-    #normalizing y
-    y = (y - y.min())/max(y.max() - y.min(), 1e-6)
-
-    #normalizing each x channel
-    for i in range(3):
-        x[..., i] = (x[..., i] - x[..., i].mean())/x[..., i].std()
-
-    x = x.swapaxes(2, 1).swapaxes(1, 0)
-    y = y.swapaxes(2, 1).swapaxes(1, 0)
-
-    return x, y
-
-def _pre_proc(batch_xy):
-    for i, xy in enumerate(batch_xy):
-        batch_xy[i] = __pre_proc(*xy)
-    return batch_xy
 
 #data augmentation default operation sequence to be applied in about every op
 _def_augm_ops = [
@@ -133,21 +58,16 @@ _augment_op_seqs = [
     ] + _def_augm_ops,
 ]
 
-def _augment(xy):
-    return augment.augment(xy, _augment_op_seqs, apply_on_y=True)
-
-import random
+#filepaths
 _fps = glob.glob("/home/erik/sal/judd_cat2000/stimuli/*")
 random.seed(42)
 random.shuffle(_fps)
-#_train_fps = _fps[:12000]
-#_test_fps = _fps[12000:13500]
-#_val_fps = _fps[13500:]
-#_train_fps = _fps[:2200]
 _train_fps = _fps[:10]
 _test_fps = _fps[2200:2600]
-#_val_fps = _fps[2600:]
 _val_fps = _fps[2600:2605]
+
+#augment function
+_augment = lambda xy: augment.augment(xy, _augment_op_seqs, apply_on_y=True)
 
 #arguments for train routine
 train = {
@@ -165,8 +85,7 @@ train = {
         #"/home/erik/rand/traindata/model-22/data/self/epoch-20_it-0",
 
     #learning rate of the model
-    #"learning_rate": 3e-4,
-    "learning_rate": 1e-5,
+    "learning_rate": 3e-4,
 
     #list with filepaths of train files
     "train_set_fps": _train_fps,
@@ -212,14 +131,14 @@ train = {
         "fetch_thr_load_chunk_size": 10,
 
         #function to return tuple (x, y_true) given filepath
-        "fetch_thr_load_fn": _load,
+        "fetch_thr_load_fn": dproc.load,
 
         #function to return list of tuples [(_x, _y), ...] given (x, y) tuple
         "fetch_thr_augment_fn": _augment,
 
         #function to return x (optionally (x, y))
         #given x (optionally y as second argument)
-        "fetch_thr_pre_proc_fn": _pre_proc,
+        "fetch_thr_pre_proc_fn": dproc.pre_proc,
 
         #the maximum factor by which number of samples will be increased
         #due to data augmentation
@@ -227,51 +146,13 @@ train = {
     },
 }
 
-def __predict(x, train_fn):
-    x = _pre_proc(x)
-    x = x.reshape((1, ) + x.shape)
-    y_pred = train_fn(x)
-    y_pred = y_pred.reshape(y_pred.shape[2:])
-    return y_pred
-
-def _predict(x, train_fn):
-    #return __predict(x, train_fn)
-    return predictfuncs.stride_predict(x, 224, 64,
-        lambda x: __predict(x, train_fn))
-
-def _predict_load(fp):
-    xy = np.load(fp)
-    return xy["x"]
-
-def _save_x(x, preds_dir, name):
-    rgbs = []
-    for i in range(0, x.shape[0], 8):
-        rgbs.append(np.dstack((x[i], x[i+1], x[i+2])))
-    rgbs = np.hstack(rgbs)
-    fp = util.uniq_filepath(preds_dir, name + "_x", ext=".png")
-    io.imsave(fp, rgbs.clip(0, 255).astype("uint8"))
-
-def _save_y_pred(y_pred, preds_dir, name):
-    fp = util.uniq_filepath(preds_dir, name + "_y-pred", ext=".png")
-    y_pred = 255*y_pred
-    io.imsave(fp, y_pred.clip(0, 255).astype("uint8"))
-
-def _save_y_true(y_true, preds_dir, name):
-    fp = util.uniq_filepath(preds_dir, name + "_y-true", ext=".png")
-    y_true = 255*y_true
-    y_true = y_true.reshape(y_true.shape[1:])
-    io.imsave(fp, y_true.clip(0, 255).astype("uint8"))
-
 #arguments for predict routine
 predict = {
     #random seed to be used, can be None
     "rand_seed": 42,
 
     #list of input filepaths containing x values (optionally (x, y_true) tuples)
-    "input_fps": glob.glob(
-        ""),
-        #"/home/erik/data/ls8/{}/cuts/cuts_0/test/*.npz".format(_crop)),
-        #"/home/erik/data/ls8/tensors/imgs/*.npz"),
+    "input_fps": glob.glob(""),
 
     #whether or not shuffle list of input filepaths
     "shuffle_input_fps": True,
@@ -285,7 +166,7 @@ predict = {
 
     #load function that, given a filepath, returns x
     #(or (x, y_true) tuple if argument 'with_trues' is set to True)
-    "load_fn": _load,
+    "load_fn": dproc.load,
 
     #predict function
     #given x and pred_fn returned by model.MetaModel.get_pred_fn, returns y_pred
