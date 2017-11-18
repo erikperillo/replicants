@@ -63,7 +63,7 @@ def main():
     print("done.")
 
     #meta-model
-    meta_model = model.MetaModel(conf.model["build_graph_fn"])
+    meta_model = model.MetaModel()
 
     #creating logging object
     log = util.Tee([sys.stdout,

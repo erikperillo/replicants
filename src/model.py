@@ -27,6 +27,7 @@ Module for representing Tensorflow/keras meta-models.
 """
 
 import tensorflow as tf
+import numpy as np
 import shutil
 import os
 
@@ -77,6 +78,136 @@ def _var_summaries(var):
         tf.summary.scalar("min", tf.reduce_min(var))
         tf.summary.histogram("histogram", var)
 
+def _conv(net, *args, **kwargs):
+    """
+    Convolution filter.
+    """
+    return tf.layers.conv2d(net, *args, **kwargs)
+
+def _max_pool(net, *args, **kwargs):
+    return tf.layers.max_pooling2d(net, *args, **kwargs)
+
+def _inception(
+        net, pool_red, conv1x1, conv3x3_red, conv3x3, conv5x5_red, conv5x5):
+    """
+    Inception layer.
+    """
+    pool_layer = _max_pool(net,
+        pool_size=(2, 2), strides=(1, 1), padding="same")
+    pool_layer = _conv(pool_layer, filters=pool_red,
+        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+
+    conv1x1_layer = _conv(net, filters=conv1x1,
+        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+
+    conv3x3_layer = _conv(net, filters=conv3x3_red,
+        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+    conv3x3_layer = _conv(conv3x3_layer, filters=conv3x3,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+
+    conv5x5_layer = _conv(net, filters=conv5x5_red,
+        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+    conv5x5_layer = _conv(conv5x5_layer, filters=conv5x5,
+        kernel_size=(5, 5), activation=tf.nn.relu, padding="same")
+
+    concat_layer = tf.concat(
+        [pool_layer, conv1x1_layer, conv3x3_layer, conv5x5_layer], axis=-1)
+
+    return concat_layer
+
+def _build_graph():
+    """
+    Builds graph.
+    This function must return a dictionary with values
+        for all keys in MetaModel.PARAMS_KEYS.
+    """
+    params = {}
+    #placeholders
+    params["x"] = tf.placeholder("float32",
+        shape=(None, 3, None, None), name="x")
+    params["y_true"] = tf.placeholder("float32",
+        shape=(None, 1, None, None), name="y_true")
+
+    #transposing
+    x = tf.transpose(params["x"], [0, 2, 3, 1])
+    y_true = tf.transpose(params["y_true"], [0, 2, 3, 1])
+
+    #learning phase
+    params["learning_phase"] = tf.placeholder("bool")
+
+    #building net
+    net = x
+
+    #first layer
+    net = _conv(net, filters=48,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _max_pool(net,
+        pool_size=(2, 2), strides=(2, 2))
+
+    #second layer
+    net = _conv(net, filters=64,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _conv(net, filters=96,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _max_pool(net,
+        pool_size=(2, 2), strides=(2, 2))
+
+    #third layer
+    net = _conv(net, filters=128,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _conv(net, filters=128,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _conv(net, filters=144,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _conv(net, filters=144,
+        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+    net = _max_pool(net,
+        pool_size=(2, 2), strides=(2, 2))
+
+    #fourth layer
+    net = _inception(net, 96, 128, 96, 192, 48, 96)
+    net = _inception(net, 64, 128, 80, 160, 24, 48)
+    net = _inception(net, 64, 128, 80, 160, 24, 48)
+    net = _inception(net, 64, 128, 96, 192, 28, 56)
+    net = _inception(net, 64, 128, 96, 192, 28, 56)
+    net = _inception(net, 64, 128, 112, 224, 32, 64)
+    net = _inception(net, 64, 128, 112, 224, 32, 64)
+    net = _inception(net, 112, 160, 128, 256, 40, 80)
+
+    #last layer
+    net = _conv(net, filters=1,
+        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+    #net = unit_norm(net)
+    y_pred = net
+
+    #counting number of params
+    print("n. params: {}".format(
+        np.sum(
+            [np.product(
+                [xi.value for xi in x.get_shape()])\
+            for x in tf.global_variables()])))
+
+    params["y_pred"] = tf.transpose(y_pred, [0, 3, 1, 2], name="y_pred")
+
+    #cost function
+    _loss = tf.losses.mean_squared_error(labels=y_true, predictions=y_pred)
+    params["loss"] = tf.reduce_mean(_loss, name="loss")
+
+    params["learning_rate"] = tf.placeholder("float32")
+
+    #update step
+    extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(extra_update_ops):
+        params["update"] = tf.train.AdamOptimizer(params["learning_rate"],
+            name="update").minimize(params["loss"])
+
+    #metrics
+    params["metrics"] = {
+        "loss": params["loss"],
+    }
+
+    return params
+
 class MetaModel:
     """
     This class contains meta-information about arbitrary models.
@@ -107,11 +238,9 @@ class MetaModel:
     def get_coll_key_for_param(param_name):
         return "/".join([MetaModel.NAME, "params", param_name])
 
-    def __init__(self, build_graph_fn):
+    def __init__(self):
         """
         Initialization of metamodel.
-        build_graph_fn is a function that must return a dictionary with values
-            for all keys in MetaModel.PARAMS_KEYS.
         Every value except for metrics is a tensorflow op/tensor of the graph:
             x: input tensor.
             y_pred: output tensor, prediction
@@ -122,7 +251,6 @@ class MetaModel:
             metrics: a dict in format metric_name: metric_tensor.
         """
         self.params = {}
-        self.build_graph_fn = build_graph_fn
 
     def build_graph(self, pre_graph=tf.Graph()):
         """
@@ -130,7 +258,7 @@ class MetaModel:
         """
         graph = tf.get_default_graph() if pre_graph is None else pre_graph
         with graph.as_default():
-            self.params = self.build_graph_fn()
+            self.params = _build_graph()
         assert set(self.params.keys()) == MetaModel.PARAMS_KEYS
         return graph
 
