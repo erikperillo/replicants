@@ -499,10 +499,10 @@ random.shuffle(_fps)
 #_test_fps = _fps[12000:13500]
 #_val_fps = _fps[13500:]
 #_train_fps = _fps[:2200]
-_train_fps = _fps[:100]
+_train_fps = _fps[:10]
 _test_fps = _fps[2200:2600]
 #_val_fps = _fps[2600:]
-_val_fps = _fps[2600:2650]
+_val_fps = _fps[2600:2605]
 
 #arguments for train routine
 train = {
@@ -537,6 +537,10 @@ train = {
 
     #computes metrics on validation set every val_every_its. can be None
     "val_every_its": 30,
+
+    #number of times val set loss does not improve before early stopping.
+    #can be None, in which case early stopping will never occur.
+    "patience": 3,
 
     #save checkpoint with graph/weights every save_every_its besides epochs.
     #can be None

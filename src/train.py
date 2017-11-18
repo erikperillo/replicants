@@ -145,16 +145,6 @@ def main():
         else:
             log_fn = None
 
-        #epoch logging
-        epoch_log_fp = os.path.join(out_dir, "etc", "train-log", "epochs.csv")
-        def epoch_log_fn(epoch, train_loss, val_dct):
-            with open(epoch_log_fp, "a") as f:
-                if epoch == 1:
-                    print("train_loss", end="," if val_dct else "", file=f)
-                    print(",".join("val_" + m for m in val_dct.keys()), file=f)
-                print(train_loss, end="," if val_dct else "", file=f)
-                print(",".join(map(str, val_dct.values())), file=f)
-
         #main train loop
         print("calling train loop")
         try:
@@ -165,9 +155,9 @@ def main():
                 val_set=conf.train["val_set_fps"],
                 val_fn=test_fn,
                 val_every_its=conf.train["val_every_its"],
+                patience=conf.train["patience"],
                 log_every_its=conf.train["log_every_its"],
                 log_fn=log_fn,
-                epoch_log_fn=epoch_log_fn,
                 save_model_fn=save_model_fn,
                 save_every_its=conf.train["save_every_its"],
                 verbose=conf.train["verbose"],

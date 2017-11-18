@@ -36,6 +36,9 @@ import math
 import queue
 from collections import defaultdict
 
+#true when it's time to kill fetch threads
+_stop_fetch_threads = False
+
 def _no_op(*args, **kwargs):
     pass
 
@@ -163,6 +166,7 @@ def batch_gen(
 
     #starting threads
     for thr in threads:
+        thr.daemon = True
         thr.start()
 
     #true iff all threads are finished
@@ -172,7 +176,7 @@ def batch_gen(
     #batch to be yielded
     batch = []
 
-    while not all_done:
+    while not all_done and not _stop_fetch_threads:
         all_done = True
         #shuffling indexes to fetch from threads in random order
         random.shuffle(thr_ids)
@@ -197,9 +201,9 @@ def batch_gen(
 
     #joining processes
     for thr in threads:
-        thr.join()
+        thr.terminate()
 
-def val_loop(val_set, val_fn, val_batch_gen_kw, print_fn=_no_op):
+def _val_set_loop(val_set, val_fn, val_batch_gen_kw, print_fn=_no_op):
     """
     Computes metrics over entire validation dataset.
     """
@@ -217,24 +221,58 @@ def val_loop(val_set, val_fn, val_batch_gen_kw, print_fn=_no_op):
         for k, v in metrics.items():
             metrics_sum[k] += v
 
-        print_fn("    [batch {}/~{}] {}".format(
+        print_fn("[batch {}/~{}] {}".format(
             i+1, n_batches, _str_fmt_dct(metrics)), 16*" ", end="\r")
+
+    print_fn("    processed {} batches".format(i+1), 16*" ")
 
     #calculating mean values
     metrics_mean = {k: v/max(i+1, 1) for k, v in metrics_sum.items()}
     return metrics_mean
 
+def _val_step(
+    val_set, val_fn, val_batch_gen_kw,
+    patience, best_loss, no_loss_improv_count,
+    print_fn=_no_op):
+
+    #calculating metrics over validation dataset
+    metrics_mean = _val_set_loop(val_set, val_fn, val_batch_gen_kw, print_fn)
+    print_fn("    mean metrics:", _str_fmt_dct(metrics_mean))
+
+    stop = False
+    #if patience is set, check for early stopping condition
+    if patience is not None:
+        #loss must be in metrics_mean dict
+        if not "loss" in metrics_mean:
+            raise ValueError(
+                "val_fn must return a dict with element 'loss'!")
+
+        loss = metrics_mean["loss"]
+        #stopping criteria
+        if best_loss is None or loss < best_loss:
+            best_loss = loss
+            no_loss_improv_count = 0
+        else:
+            no_loss_improv_count += 1
+            if no_loss_improv_count > patience:
+                stop = True
+
+    return stop, best_loss, no_loss_improv_count
+
 def train_loop(
     train_set, train_fn,
     n_epochs=10,
-    val_set=None, val_fn=None, val_every_its=None,
-    log_every_its=None, log_fn=_no_op, epoch_log_fn=_no_op,
+    val_set=None, val_fn=None, val_every_its=None, patience=None,
+    log_every_its=None, log_fn=_no_op,
     save_model_fn=_no_op, save_every_its=None,
     verbose=2, print_fn=print,
     batch_gen_kw={}):
     """
     General Training loop.
     """
+    #it is set to True to stop fetch threads
+    global _stop_fetch_threads
+
     #info/warning functions
     info = print_fn if verbose >= 2 else _no_op
     warn = print_fn if verbose >= 1 else _no_op
@@ -254,6 +292,10 @@ def train_loop(
     #total train iterations
     its = 0
 
+    #parameters for early stopping to be used if patience is set
+    best_val_loss = None
+    no_val_loss_improv_count = 0
+
     #initial start time
     start_time = time.time()
 
@@ -262,9 +304,9 @@ def train_loop(
     for epoch in _inf_gen():
         #checking stopping
         if n_epochs is not None and epoch >= n_epochs:
-            warn("\n[warning] maximum number of epochs reached")
-            end_reason = "n_epochs"
-            return end_reason
+            warn("\nWARNING: maximum number of epochs reached")
+            _stop_fetch_threads = True
+            return
 
         info("{}/{} epochs (time so far: {})".format(
             epoch, _str(n_epochs), _str_fmt_time(time.time() - start_time)))
@@ -282,8 +324,8 @@ def train_loop(
             #model update
             loss = train_fn(bx, by)
             loss_sum += loss
-            print_("    [batch {}/~{}] loss: {:.4g}".format(
-                i+1, n_batches, loss), 16*" ", end="\r")
+            print_("[epoch {}, batch {}/~{}] loss: {:.4g}".format(
+                epoch, i+1, n_batches, loss), 16*" ", end="\r")
 
             #logging every #step
             if log_every_its is not None and its%log_every_its == 0:
@@ -295,23 +337,27 @@ def train_loop(
 
                 #uncomment this to print statistics on console
                 #metrics = val_fn(bx, by)
-                #print_("    [batch {}] metrics (train): {}".format(
+                #print_("[batch {}] metrics (train): {}".format(
                 #    i+1, _str_fmt_dct(metrics)), 16*" ")
                 #metrics = val_fn(val_bx, val_by)
-                #print_("    [batch {}] metrics (val): {}".format(
+                #print_("[batch {}] metrics (val): {}".format(
                 #    i+1, _str_fmt_dct(metrics)), 16*" ")
                 log_fn(bx, by, its, train=True)
                 log_fn(val_bx, val_by, its, train=False)
 
             #validation every #step if required
             if val_every_its is not None and its%val_every_its == 0:
-                metrics_mean = val_loop(val_set, val_fn, val_batch_gen_kw,
-                    print_)
-                info("\n    ----------")
-                info("    validation on it #{}:".format(its), 40*" ")
-                info("        processed {} batches".format(i+1))
-                info("        mean metrics:", _str_fmt_dct(metrics_mean))
-                info("    ----------", flush=True)
+                info("\n----------\nvalidation on it #{}".format(its), 16*" ")
+                early_stopping, best_val_loss, no_val_loss_improv_count =\
+                    _val_step(val_set, val_fn, val_batch_gen_kw,
+                        patience, best_val_loss, no_val_loss_improv_count,
+                        info)
+                info("----------")
+
+                if early_stopping:
+                    info("WARNING: early stopping condition met")
+                    _stop_fetch_threads = True
+                    return
 
             #saving model every #step if required
             if save_every_its is not None and its%save_every_its == 0:
@@ -320,24 +366,26 @@ def train_loop(
         #saving model after epoch
         save_model_fn(epoch+1, 0)
 
-        info("\n    ----------\n    end of epoch #{}".format(epoch))
+        info("\n----------\nend of epoch #{}".format(epoch))
         #printing train loop metrics
         loss_mean = loss_sum/max(i+1, 1)
-        info("    train set:", 32*" ")
-        info("        processed {} batches".format(i+1))
-        info("        mean loss: {}".format(loss_mean), flush=True)
+        info("train set:", 32*" ")
+        info("    processed {} batches".format(i+1), 16*" ")
+        info("    mean loss: {}".format(loss_mean), flush=True)
 
         if not validation:
-            info("    ----------")
+            info("----------")
             continue
 
-        #getting metrics for validation set after epoch
-        metrics_mean = val_loop(val_set, val_fn, val_batch_gen_kw, print_)
-        #printing results
-        info("    val set:", 40*" ")
-        info("        processed {} batches".format(i+1))
-        info("        mean metrics:", _str_fmt_dct(metrics_mean))
-        info("    ----------", flush=True)
+        #validation step after epoch
+        info("val set:")
+        early_stopping, best_val_loss, no_val_loss_improv_count =\
+            _val_step(val_set, val_fn, val_batch_gen_kw,
+                patience, best_val_loss, no_val_loss_improv_count,
+                info)
+        info("----------")
 
-        #calling epoch logging function
-        epoch_log_fn(epoch+1, loss_mean, metrics_mean)
+        if early_stopping:
+            info("WARNING: early stopping condition met")
+            _stop_fetch_threads = True
+            return
