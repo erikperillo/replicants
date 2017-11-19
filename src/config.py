@@ -63,7 +63,7 @@ _fps = glob.glob("/home/erik/sal/judd_cat2000/stimuli/*")
 random.seed(42)
 random.shuffle(_fps)
 _train_fps = _fps[:10]
-_test_fps = _fps[2200:2600]
+_test_fps = _fps[2200:2211]
 _val_fps = _fps[2600:2605]
 
 #augment function
@@ -131,14 +131,14 @@ train = {
         "fetch_thr_load_chunk_size": 10,
 
         #function to return tuple (x, y_true) given filepath
-        "fetch_thr_load_fn": dproc.load,
+        "fetch_thr_load_fn": dproc.train_load,
 
         #function to return list of tuples [(_x, _y), ...] given (x, y) tuple
         "fetch_thr_augment_fn": _augment,
 
         #function to return x (optionally (x, y))
         #given x (optionally y as second argument)
-        "fetch_thr_pre_proc_fn": dproc.pre_proc,
+        "fetch_thr_pre_proc_fn": dproc.train_pre_proc,
 
         #the maximum factor by which number of samples will be increased
         #due to data augmentation
@@ -147,36 +147,36 @@ train = {
 }
 
 #arguments for predict routine
-predict = {
+infer = {
     #random seed to be used, can be None
     "rand_seed": 42,
 
     #list of input filepaths containing x values (optionally (x, y_true) tuples)
-    "input_fps": glob.glob(""),
+    "input_fps": _test_fps,
 
     #whether or not shuffle list of input filepaths
     "shuffle_input_fps": True,
 
     #path to directory containing meta-graph and weights for model
     "model_path": \
-        "/home/erik/rand/traindata/train-190/ckpts/final",
+        "/home/erik/rand/traindata/model-131/data/self/final",
 
     #base dir where new preds directory will be created
     "preds_save_dir_basedir": "/home/erik/rand/preds",
 
     #load function that, given a filepath, returns x
     #(or (x, y_true) tuple if argument 'with_trues' is set to True)
-    "load_fn": dproc.load,
+    #"load_fn": dproc.load,
 
     #predict function
     #given x and pred_fn returned by model.MetaModel.get_pred_fn, returns y_pred
-    "predict_fn": _predict,
+    #"predict_fn": _predict,
 
     #if true, creates table.npz, containing x_fps, y_pred (and possibly y_true)
-    "save_tables": True,
+    "save_tables": not True,
 
     #if true, tries to load true values with load_fn
-    "with_trues": True,
+    "with_trues": not True,
 
     #maximum prediction data points to be stored, can be None
     "max_pred_points": 9999999,
@@ -185,11 +185,11 @@ predict = {
     "max_n_preds_save": 30,
 
     #function to save x, given x, base_dir (always exists) and pattern 'name'
-    "save_x_fn": _save_x,
+    #"save_x_fn": _save_x,
 
     #function to save pred, given x, base_dir (always exists) and pattern 'name'
-    "save_pred_fn": _save_y_pred,
+    #"save_pred_fn": _save_y_pred,
 
     #function to save true, given x, base_dir (always exists) and pattern 'name'
-    "save_true_fn": _save_y_true,
+    #"save_true_fn": _save_y_true,
 }

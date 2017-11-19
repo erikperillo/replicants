@@ -35,53 +35,26 @@ import os
 
 import util
 import model
-import dproc
-from config import predict as conf
+from config import infer as conf
 import config
+from dproc import infer_load as load
+from dproc import infer_pre_proc as pre_proc
+from dproc import infer_save_x as save_x
+from dproc import infer_save_y_pred as save_y_pred
+from dproc import infer_save_y_true as save_y_true
 
 def predict(x, fn):
-    x = _predict_pre_proc(x)
     x = x.reshape((1, ) + x.shape)
     y_pred = fn(x)
     y_pred = y_pred.reshape(y_pred.shape[2:])
-    y_pred = transf.rescale(y_pred, 8, mode="constant")
-    y_pred = unit_norm(y_pred)
     return y_pred
-
-def load(fp):
-    x = dproc.load(fp)[0]
-    x = x.swapaxes(0, 1).swapaxes(1, 2)
-
-    #reshaping to fix max input shape if necessary
-    h, w = x.shape[:2]
-    max_h, max_w = (480, 640)
-    max_ratio = max(h/max_h, w/max_w)
-    if max_ratio > 1.0:
-        x = (255*transf.rescale(x, 1/max_ratio,
-            mode="constant")).astype("uint8")
-    return x
-
-def save_x(x, preds_dir, name):
-    fp = util.uniq_filepath(preds_dir, name + "_x", ext=".png")
-    io.imsave(fp, x.clip(0, 255).astype("uint8"))
-
-def save_y_pred(y_pred, preds_dir, name):
-    fp = util.uniq_filepath(preds_dir, name + "_y-pred", ext=".png")
-    y_pred = 255*y_pred
-    io.imsave(fp, y_pred.clip(0, 255).astype("uint8"))
-
-def save_y_true(y_true, preds_dir, name):
-    fp = util.uniq_filepath(preds_dir, name + "_y-true", ext=".png")
-    y_true = 255*y_true
-    y_true = y_true.reshape(y_true.shape[1:])
-    io.imsave(fp, y_true.clip(0, 255).astype("uint8"))
 
 def mk_preds_dir(base_dir, pattern="train"):
     """
     Creates dir to store predictions.
     """
     #creating dir
-    out_dir = util.uniq_filepath(base_dir, pattern)
+    out_dir = util.uniq_path(base_dir, pattern)
     os.makedirs(out_dir)
     return out_dir
 
@@ -112,11 +85,11 @@ def main():
         os.makedirs(conf["preds_save_dir_basedir"])
     #creating preds dir
     preds_dir = mk_preds_dir(conf["preds_save_dir_basedir"], "preds")
-    #copying config file
-    shutil.copy(config.__file__, preds_dir)
+    #copying model dir
+    util.mk_model_dir(preds_dir)
 
     #meta-model
-    meta_model = model.MetaModel(config.model["build_graph_fn"])
+    meta_model = model.MetaModel()
 
     with tf.Session(graph=tf.Graph()) as sess:
         #loading model weights
@@ -132,15 +105,13 @@ def main():
         for i, fp in enumerate(input_fps):
             print("on image '{}'".format(fp))
 
-            if conf["with_trues"]:
-                x, y_true = load(fp)
-            else:
-                x = load(fp)
+            x, y_true = load(fp)
 
             print("\tpredicting...")
             print("\tx shape:", x.shape)
+            x_ = pre_proc(x.copy())
             start_time = time.time()
-            y_pred = pred_fn(x)
+            y_pred = pred_fn(x_)
             pred_time = time.time() - start_time
             print("\tdone predicting. took {:.6f} seconds".format(pred_time))
             print("\ty_pred shape:", y_pred.shape)
@@ -179,7 +150,7 @@ def main():
                 if save_y_pred is not None:
                     save_y_pred(y_pred, preds_dir, name)
                 #saving ground-truth
-                if save_true_fn is not None and conf["with_trues"]:
+                if save_y_true is not None and conf["with_trues"]:
                     save_y_true(y_true, preds_dir, name)
 
         #saving predictions

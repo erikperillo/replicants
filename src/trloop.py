@@ -385,7 +385,7 @@ def train_loop(
                 info)
         info("----------")
 
-        if early_stopping:
+        if early_stopping and val_every_its is None:
             info("WARNING: early stopping condition met")
             _stop_fetch_threads = True
             return

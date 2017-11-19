@@ -36,6 +36,11 @@ import numpy as np
 import glob
 import os
 
+import util
+
+def _unit_norm(x, eps=1e-6):
+    return (x - x.min())/max(x.max() - x.min(), eps)
+
 def _load_salicon(fp_or_fps):
     fn = os.path.basename(fp_or_fps)
     dn = os.path.dirname(os.path.dirname(fp_or_fps))
@@ -60,26 +65,33 @@ def _load_judd(fp_or_fps):
     y = y.reshape((1, ) + y.shape)
     return x, y
 
-def load(fp):
+def train_load(fp):
     return _load_judd(fp)
 
-def _pre_proc(x, y=None):
-    x = x.swapaxes(0, 1).swapaxes(1, 2)
-    y = y.swapaxes(0, 1).swapaxes(1, 2)
+def infer_load(fp):
+    return _load_judd(fp)
 
+def _pre_proc(x, y=None, resize=False):
+    x = x.swapaxes(0, 1).swapaxes(1, 2)
     #converting images to float
     x = img_as_float(x)
-    y = img_as_float(y)
+
+    if y is not None:
+        y = y.swapaxes(0, 1).swapaxes(1, 2)
+        y = img_as_float(y)
 
     #reshaping to fix max input shape if necessary
     h, w = x.shape[:2]
-    max_h, max_w = (480, 640)
+    max_h, max_w = (240, 320)
     max_ratio = max(h/max_h, w/max_w)
-    #if max_ratio > 1.0:
-    #    x = transf.rescale(x, 1/max_ratio, mode="constant")#.astype("uint8")
-    #    y = transf.rescale(y, 1/max_ratio, mode="constant")#.astype("uint8")
-    x = transf.resize(x, (max_h, max_w), mode="constant")#.astype("uint8")
-    y = transf.resize(y, (max_h, max_w), mode="constant")#.astype("uint8")
+    if resize:
+        x = transf.resize(x, (max_h, max_w), mode="constant")
+        if y is not None:
+            y = transf.resize(y, (max_h, max_w), mode="constant")
+    elif max_ratio > 1.0:
+        x = transf.rescale(x, 1/max_ratio, mode="constant")
+        if y is not None:
+            y = transf.rescale(y, 1/max_ratio, mode="constant")
 
     #converting x colorspace to LAB
     x = color.rgb2lab(x)
@@ -87,22 +99,47 @@ def _pre_proc(x, y=None):
     #preparing shapes to be divisable by 2^3
     h, w = x.shape[:2]
     x = x[h%8:, w%8:]
-    y = y[h%8:, w%8:]
-    #reshaping y
-    y = transf.resize(y, (h//8, w//8), mode="constant")
-    #normalizing y
-    y = (y - y.min())/max(y.max() - y.min(), 1e-6)
+    if y is not None:
+        y = y[h%8:, w%8:]
+        #reshaping y
+        y = transf.resize(y, (h//8, w//8), mode="constant")
+        #normalizing y
+        y = _unit_norm(y)
 
     #normalizing each x channel
     for i in range(3):
         x[..., i] = (x[..., i] - x[..., i].mean())/x[..., i].std()
 
     x = x.swapaxes(2, 1).swapaxes(1, 0)
-    y = y.swapaxes(2, 1).swapaxes(1, 0)
+    if y is not None:
+        y = y.swapaxes(2, 1).swapaxes(1, 0)
 
-    return x, y
+    if y is not None:
+        return x, y
+    return x
 
-def pre_proc(batch_xy):
+def train_pre_proc(batch_xy):
     for i, xy in enumerate(batch_xy):
-        batch_xy[i] = _pre_proc(*xy)
+        batch_xy[i] = _pre_proc(*xy, resize=True)
     return batch_xy
+
+def infer_pre_proc(x):
+    return _pre_proc(x, resize=False)
+
+def infer_save_x(x, preds_dir, name):
+    fp = util.uniq_path(preds_dir, name + "_x", ext=".png")
+    x = np.moveaxis(x, 0, -1)
+    print("x shp...", x.shape)
+    io.imsave(fp, x.clip(0, 255).astype("uint8"))
+
+def infer_save_y_pred(y_pred, preds_dir, name):
+    fp = util.uniq_path(preds_dir, name + "_y-pred", ext=".png")
+    y_pred = transf.rescale(y_pred, 8, mode="constant")
+    y_pred = 255*_unit_norm(y_pred)
+    io.imsave(fp, y_pred.clip(0, 255).astype("uint8"))
+
+def infer_save_y_true(y_true, preds_dir, name):
+    fp = util.uniq_path(preds_dir, name + "_y-true", ext=".png")
+    y_true = 255*_unit_norm(y_true)
+    y_true = y_true.reshape(y_true.shape[1:])
+    io.imsave(fp, y_true.clip(0, 255).astype("uint8"))
