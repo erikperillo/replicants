@@ -30,7 +30,6 @@ import glob
 import util
 import augment
 import dproc
-import predictfuncs
 
 #data augmentation default operation sequence to be applied in about every op
 _def_augm_ops = [
