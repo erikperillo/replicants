@@ -73,40 +73,24 @@ def mk_model_dir(base_dir, pattern="model"):
     """
     Creates structure for model to be stored.
     """
+    #creating base dir if it does not exist
+    if not os.path.isdir(base_dir):
+        os.makedirs(base_dir)
+
     #making directory to store everything
     model_dir = uniq_path(base_dir, pattern)
 
     #building structure
     struct = [
-        "doc",
-        "bin",
-        "data",
-        os.path.join("data", "self"),
-        os.path.join("data", "input"),
+        "self",
+        os.path.join("self", "ckpts"),
+        "input",
         "etc",
-        os.path.join("etc", "eval"),
         os.path.join("etc", "train-log"),
-        os.path.join("etc", "train-log", "tensorboard"),
+        os.path.join("etc", "train-log", "summaries"),
     ]
     for dp in struct:
         os.makedirs(os.path.join(model_dir, dp))
-
-    #copying files
-    code_dir = os.path.dirname(__file__)
-    fns = [
-        "train.py",
-        "infer.py",
-        "config.py",
-        "eval.py",
-        "trloop.py",
-        "util.py",
-        "model.py",
-        "augment.py",
-        "predictfuncs.py",
-    ]
-    for fn in fns:
-        shutil.copy(
-            os.path.join(code_dir, fn), os.path.join(model_dir, "bin"))
 
     return model_dir
 

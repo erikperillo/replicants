@@ -60,6 +60,16 @@ def hmirr(x, y):
     x, y = _hmirr(x), y if y is None else _hmirr(y)
     return x, y
 
+def some_of(x, y=None, ops=[]): 
+    """
+    Chooses one operation from ops.
+    """
+    op = np.random.choice(ops)
+    x = op(x)
+    if y is not None:
+        y = op(y)
+    return x, y
+
 def _rotation(img, angle, **kwargs):
     """
     Rotates image in degrees in counter-clockwise direction.

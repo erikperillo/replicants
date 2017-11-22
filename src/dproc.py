@@ -48,6 +48,8 @@ def _load_salicon(fp_or_fps):
     y_fp = os.path.join(dn, "maps", fn)
     x = io.imread(x_fp)
     y = io.imread(y_fp)
+    if x.ndim < 3:
+        x = np.dstack(3*(x, ))
     x = x.swapaxes(2, 1).swapaxes(1, 0)
     y = y.reshape((1, ) + y.shape)
     return x, y
@@ -66,9 +68,11 @@ def _load_judd(fp_or_fps):
     return x, y
 
 def train_load(fp):
-    return _load_judd(fp)
+    #return _load_judd(fp)
+    return _load_salicon(fp)
 
 def infer_load(fp):
+    #return _load_judd(fp)
     return _load_judd(fp)
 
 def _pre_proc(x, y=None, resize=False):
@@ -110,9 +114,9 @@ def _pre_proc(x, y=None, resize=False):
     for i in range(3):
         x[..., i] = (x[..., i] - x[..., i].mean())/x[..., i].std()
 
-    x = x.swapaxes(2, 1).swapaxes(1, 0)
+    x = x.swapaxes(2, 1).swapaxes(1, 0).astype("float32")
     if y is not None:
-        y = y.swapaxes(2, 1).swapaxes(1, 0)
+        y = y.swapaxes(2, 1).swapaxes(1, 0).astype("float32")
 
     if y is not None:
         return x, y

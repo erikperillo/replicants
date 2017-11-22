@@ -59,12 +59,12 @@ _augment_op_seqs = [
 ]
 
 #filepaths
-_fps = glob.glob("/home/erik/sal/judd_cat2000/stimuli/*")
+_fps = glob.glob("/data/sal/salicon/maps/*")
 random.seed(42)
 random.shuffle(_fps)
-_train_fps = _fps[:10]
-_test_fps = _fps[2200:2211]
-_val_fps = _fps[2600:2605]
+_train_fps = _fps[:100]
+_val_fps = _fps[100:150]
+_test_fps = _fps[150:200]
 
 #augment function
 _augment = lambda xy: augment.augment(xy, _augment_op_seqs, apply_on_y=True)
@@ -72,7 +72,7 @@ _augment = lambda xy: augment.augment(xy, _augment_op_seqs, apply_on_y=True)
 #arguments for train routine
 train = {
     #base directory where new directory with train data will be created
-    "out_dir_basedir": "/home/erik/rand/traindata",
+    "out_dir_basedir": "/data/traindata",
 
     #use tensorboard summaries
     "use_tensorboard": True,
@@ -82,10 +82,9 @@ train = {
     #can be None
     "pre_trained_model_path": \
         None,
-        #"/home/erik/rand/traindata/model-22/data/self/epoch-20_it-0",
 
     #learning rate of the model
-    "learning_rate": 3e-4,
+    "learning_rate": 1e-4,
 
     #list with filepaths of train files
     "train_set_fps": _train_fps,
@@ -100,11 +99,11 @@ train = {
     "log_every_its": 20,
 
     #computes metrics on validation set every val_every_its. can be None
-    "val_every_its": 30,
+    "val_every_its": None,
 
     #number of times val set loss does not improve before early stopping.
     #can be None, in which case early stopping will never occur.
-    "patience": 3,
+    "patience": 4,
 
     #save checkpoint with graph/weights every save_every_its besides epochs.
     #can be None
@@ -116,10 +115,10 @@ train = {
     #arguments to be provided by trloop.batch_gen function
     "batch_gen_kw": {
         #size of batch to be fed to model
-        "batch_size": 2,
+        "batch_size": 24,
 
         #number of fetching threads for data loading/pre-processing/augmentation
-        "n_threads": 14,
+        "n_threads": 12,
 
         #maximum number of samples to be loaded at a time.
         #the actual number may be slightly larger due to rounding.
@@ -128,7 +127,7 @@ train = {
         #the fetching threads loads a chunk of this size before augmentation
         #and pre-processing.
         #this spreads out the augmented versions of an image in the feeding line
-        "fetch_thr_load_chunk_size": 10,
+        "fetch_thr_load_chunk_size": 32,
 
         #function to return tuple (x, y_true) given filepath
         "fetch_thr_load_fn": dproc.train_load,
@@ -136,8 +135,8 @@ train = {
         #function to return list of tuples [(_x, _y), ...] given (x, y) tuple
         "fetch_thr_augment_fn": _augment,
 
-        #function to return x (optionally (x, y))
-        #given x (optionally y as second argument)
+        #function to return batches of x (optionally (x, y))
+        #given batches of x (optionally y as second argument)
         "fetch_thr_pre_proc_fn": dproc.train_pre_proc,
 
         #the maximum factor by which number of samples will be increased
@@ -164,14 +163,6 @@ infer = {
     #base dir where new preds directory will be created
     "preds_save_dir_basedir": "/home/erik/rand/preds",
 
-    #load function that, given a filepath, returns x
-    #(or (x, y_true) tuple if argument 'with_trues' is set to True)
-    #"load_fn": dproc.load,
-
-    #predict function
-    #given x and pred_fn returned by model.MetaModel.get_pred_fn, returns y_pred
-    #"predict_fn": _predict,
-
     #if true, creates table.npz, containing x_fps, y_pred (and possibly y_true)
     "save_tables": not True,
 
@@ -183,13 +174,4 @@ infer = {
 
     #maximum number of preds to save, can be None
     "max_n_preds_save": 30,
-
-    #function to save x, given x, base_dir (always exists) and pattern 'name'
-    #"save_x_fn": _save_x,
-
-    #function to save pred, given x, base_dir (always exists) and pattern 'name'
-    #"save_pred_fn": _save_y_pred,
-
-    #function to save true, given x, base_dir (always exists) and pattern 'name'
-    #"save_true_fn": _save_y_true,
 }

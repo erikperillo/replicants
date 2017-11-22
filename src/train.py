@@ -47,11 +47,11 @@ def populate_out_dir(out_dir):
         print("git commit hash:", util.git_hash(), file=f)
 
     #saving train/val filepaths
-    with open(os.path.join(out_dir, "data", "input", "train.csv"), "w") as f:
+    with open(os.path.join(out_dir, "input", "train.csv"), "w") as f:
         for fp in conf.train["train_set_fps"]:
             print(fp, file=f)
 
-    with open(os.path.join(out_dir, "data", "input", "val.csv"), "w") as f:
+    with open(os.path.join(out_dir, "input", "val.csv"), "w") as f:
         for fp in conf.train["val_set_fps"]:
             print(fp, file=f)
 
@@ -123,9 +123,12 @@ def main():
                     meta_model.params["metrics"].keys(), metrics_values))
 
         #save model function: given epoch and iter number, saves checkpoint
-        def save_model_fn(epoch, it):
-            path = os.path.join(out_dir, "data", "self",
-                "epoch-{}_it-{}".format(epoch, it))
+        def save_model_fn(epoch=None, it=None, name=None):
+            if name is None:
+                path = os.path.join(out_dir, "self", "ckpts",
+                    "epoch-{}_it-{}".format(epoch, it))
+            else:
+                path = os.path.join(out_dir, "self", "ckpts", "{}".format(name))
             model.save(sess, path, overwrite=True)
             print("    saved checkpoint to '{}'".format(path))
 
@@ -173,7 +176,7 @@ def main():
                 val_writer.close()
 
             #saving model on final state
-            path = os.path.join(out_dir, "data", "self", "final")
+            path = os.path.join(out_dir, "self", "ckpts", "final")
             print("saving checkpoint to '{}'...".format(path), flush=True)
             model.save(sess, path, overwrite=True)
 

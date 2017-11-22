@@ -348,11 +348,16 @@ def train_loop(
             #validation every #step if required
             if val_every_its is not None and its%val_every_its == 0:
                 info("\n----------\nvalidation on it #{}".format(its), 16*" ")
+                #old best validation loss
+                best_val_loss_ = best_val_loss
                 early_stopping, best_val_loss, no_val_loss_improv_count =\
                     _val_step(val_set, val_fn, val_batch_gen_kw,
                         patience, best_val_loss, no_val_loss_improv_count,
                         info)
                 info("----------")
+
+                if best_val_loss_ is None or best_val_loss < best_val_loss_:
+                    save_model_fn(name="best")
 
                 if early_stopping:
                     info("WARNING: early stopping condition met")
@@ -379,6 +384,7 @@ def train_loop(
 
         #validation step after epoch
         info("val set:")
+        best_val_loss_ = best_val_loss
         early_stopping, best_val_loss, no_val_loss_improv_count =\
             _val_step(val_set, val_fn, val_batch_gen_kw,
                 patience, best_val_loss, no_val_loss_improv_count,
@@ -389,3 +395,6 @@ def train_loop(
             info("WARNING: early stopping condition met")
             _stop_fetch_threads = True
             return
+
+        if best_val_loss_ is None or best_val_loss < best_val_loss_:
+            save_model_fn(name="best")
