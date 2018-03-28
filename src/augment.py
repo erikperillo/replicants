@@ -1,7 +1,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017 Erik Perillo <erik.perillo@gmail.com>
+Copyright (c) 2017, 2018 Erik Perillo <erik.perillo@gmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,158 +22,242 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 """
 
+from skimage import io
+from skimage import transform as skt
+from skimage import filters as skf
+import random
+import numpy as np
+
 """
 Module for data augmentation.
 """
 
-from skimage import io
-from skimage import transform as skt
-from skimage import filters as skf
-import numpy as np
+
+# filling strategy for when a transformation leaves blank pixel spaces
+_FILL_MODE = "constant"
+
+
+def _hwc_to_chw(x):
+    """
+    Converts image from ([...,] height, width, channels) to
+    (channels, height, width).
+    """
+    if x.ndim < 3:
+        return x
+    return x.swapaxes(2, 1).swapaxes(1, 0)
+
+
+def _chw_to_hwc(x):
+    """
+    Converts image from ([...,] channels, height, width) to
+    (height, width, channels).
+    """
+    if x.ndim < 3:
+        return x
+    return x.swapaxes(0, 1).swapaxes(1, 2)
+
 
 def _get_rng(rng):
+    """
+    If rng not in range format, converts it to range format.
+    """
     if not isinstance(rng, (list, tuple)):
         rng = (rng, rng)
     return rng
 
-def _rot90(arr, reps=1):
+
+def _rot90(x, reps=1):
     """
     Performs 90 degrees rotation 'reps' times.
     Assumes image with shape ([n_samples, n_channels,] height, width).
     """
-    for __ in range(reps%4):
-        arr = arr.swapaxes(-2, -1)[..., ::-1]
-    return arr
+    for __ in range(reps % 4):
+        x = x.swapaxes(-2, -1)[..., ::-1]
+    return x
 
-def rot90(x, y, reps=1):
-    x, y = _rot90(x, reps), y if y is None else _rot90(y, reps)
-    return x, y
 
-def _hmirr(img):
+def rot90(x, y, reps):
+    """
+    Wrapper for _rot90 for xy pair.
+    reps is number of repetitions for 90 degrees rotation (clockwise).
+    """
+    reps = random.randint(*_get_rng(reps))
+    return _rot90(x, reps), _rot90(y, reps)
+
+
+def _hmirr(x):
     """
     Flips image horizontally.
     Assumes image with shape ([n_samples, n_channels,] height, width).
     """
-    return img[..., ::-1]
+    return x[..., ::-1]
+
 
 def hmirr(x, y):
-    x, y = _hmirr(x), y if y is None else _hmirr(y)
-    return x, y
-
-def some_of(x, y=None, ops=[]): 
     """
-    Chooses one operation from ops.
+    Wrapper for _hmirr for xy pair.
     """
-    op = np.random.choice(ops)
-    x = op(x)
-    if y is not None:
-        y = op(y)
-    return x, y
+    return _hmirr(x), _hmirr(y)
 
-def _rotation(img, angle, **kwargs):
+
+def _rotation(x, angle, **kwargs):
     """
     Rotates image in degrees in counter-clockwise direction.
-    Assumes image in [0, 1] with shape ([n_samples, n_channels,] height, width).
+    Assumes image in [0, 1] with shape
+    ([n_samples, n_channels,] height, width).
     """
-    img = img.swapaxes(0, 1).swapaxes(1, 2)
-    img = skt.rotate(img, angle=angle, resize=False, mode="constant",
-        preserve_range=True, **kwargs).astype(img.dtype)
-    img = img.swapaxes(2, 1).swapaxes(1, 0)
-    return img
+    x = _chw_to_hwc(x)
+    x = skt.rotate(x, angle=angle, resize=False, mode=_FILL_MODE,
+                   preserve_range=True, **kwargs).astype(x.dtype)
+    x = _hwc_to_chw(x)
+    return x
 
-def rotation(x, y, rng, **kwargs):
-    angle = np.random.uniform(*rng)
-    x = _rotation(x, angle, **kwargs)
-    y = y if y is None else _rotation(y, angle, **kwargs)
-    return x, y
 
-def _shear(img, shear):
+def rotation(x, y, angle, **kwargs):
+    """
+    Wrapper for _rotation for xy pair.
+    angle is rotation angle in degrees (counter-clockwise).
+    """
+    angle = random.uniform(*_get_rng(angle))
+    return _rotation(x, angle, **kwargs), _rotation(y, angle, **kwargs)
+
+
+def _shear(x, angle):
     """
     Shears image.
-    Assumes image in [0, 1] with shape ([n_samples, n_channels,] height, width).
+    Assumes image in [0, 1] with shape
+    ([n_samples, n_channels,] height, width).
     """
-    at = skt.AffineTransform(shear=shear)
-    img = img.swapaxes(0, 1).swapaxes(1, 2)
-    img = skt.warp(img, at)
-    img = img.swapaxes(2, 1).swapaxes(1, 0)
-    return img
+    at = skt.AffineTransform(shear=angle)
+    x = _chw_to_hwc(x)
+    x = skt.warp(x, at, mode=_FILL_MODE)
+    x = _hwc_to_chw(x)
+    return x
 
-def shear(x, y, rng, **kwargs):
-    shear = np.random.uniform(*rng)
-    x, y = _shear(x, shear), y if y is None else _shear(y, shear)
-    return x, y
 
-def _translation(img, transl):
+def shear(x, y, angle, **kwargs):
     """
-    Performs shift in image in dx, dy = transl.
-    Assumes image in [0, 1] with shape ([n_samples, n_channels,] height, width).
+    Wrapper for _shear for xy pair.
+    angle is shear angle in radians (counter-clockwise).
+    """
+    angle = random.uniform(*_get_rng(angle))
+    return _shear(x, angle, **kwargs), _shear(y, angle, **kwargs)
+
+
+def _translation(x, transl):
+    """
+    Performs shift in image in dx, dy = transl (in pixels).
+    Assumes image in [0, 1] with shape
+    ([n_samples, n_channels,] height, width).
     """
     at = skt.AffineTransform(translation=transl)
-    img = img.swapaxes(0, 1).swapaxes(1, 2)
-    img = skt.warp(img, at)
-    img = img.swapaxes(2, 1).swapaxes(1, 0)
-    return img
+    x = _chw_to_hwc(x)
+    x = skt.warp(x, at, mode=_FILL_MODE)
+    x = _hwc_to_chw(x)
+    return x
 
-def translation(x, y, rng):
-    h, w = x.shape[-2:]
-    transl = (int(np.random.uniform(*rng)*w), int(np.random.uniform(*rng)*h))
-    x, y = _translation(x, transl), y if y is None else _translation(y, transl)
-    return x, y
 
-def _add_noise(img, noise):
+def translation(x, y, transl):
+    """
+    Wrapper for _translation for xy pair.
+    transl is range to translade in xy (a fraction ranging in [0, 1]).
+    """
+    transl_x = int(random.uniform(*_get_rng(transl))*x.shape[-1])
+    transl_y = int(random.uniform(*_get_rng(transl))*x.shape[-2])
+    transl = (transl_x, transl_y)
+    return _translation(x, transl), _translation(y, transl)
+
+
+def _add_noise(x, noise, clip=True):
     """
     Adds noise to image.
     Assumes image in [0, 1].
     """
-    img = img + noise
-    return img
+    x = x + noise
+    if clip:
+        x = x.clip(0, 1)
+    return x
 
-def add_noise(x, y, rng):
-    noise = np.random.uniform(*rng, size=x.shape).astype("float32")
-    x, y = _add_noise(x, noise), y
-    return x, y
 
-def _mul_noise(img, noise):
+def add_noise(x, y, noise, clip=True):
+    """
+    Wrapper for _add_noise for xy pair.
+    """
+    noise = np.random.uniform(*_get_rng(noise), size=x.shape[-2:])
+    return _add_noise(x, noise, clip), y
+
+
+def _mul_noise(x, noise, clip=True):
     """
     Multiplies image by a factor.
     Assumes image in [0, 1].
     """
-    img = img*noise
-    return img
+    x = x*noise
+    if clip:
+        x = x.clip(0, 1)
+    return x
 
-def mul_noise(x, y, rng):
-    noise = np.random.uniform(*rng)
-    x, y = _mul_noise(x, noise), y
-    return x, y
 
-def _blur(img, sigma):
+def mul_noise(x, y, noise, clip=True):
+    """
+    Wrapper for _mul_noise for xy pair.
+    """
+    noise = random.uniform(*_get_rng(noise))
+    return _mul_noise(x, noise, clip), y
+
+
+def _blur(x, sigma):
     """
     Applies gaussian blur to image.
-    Assumes image in [0, 1] with shape ([n_samples, n_channels,] height, width).
+    Assumes image in [0, 1] with shape
+    ([n_samples,] n_channels, height, width).
     """
-    img = img.swapaxes(0, 1).swapaxes(1, 2)
-    for i in range(img.shape[-1]):
-        img[..., i] = skf.gaussian(img[..., i], sigma=sigma)
-    img = img.swapaxes(2, 1).swapaxes(1, 0)
-    return img
+    x = _chw_to_hwc(x)
+    for i in range(x.shape[-1]):
+        x[..., i] = skf.gaussian(x[..., i], sigma=sigma)
+    x = _hwc_to_chw(x)
+    return x
 
-def blur(x, y, rng=0.5):
-    sigma = np.random.uniform(*rng)
-    x, y = _blur(x, sigma), y
-    return x, y
+
+def blur(x, y, sigma):
+    """
+    Wrapper for _blur for xy pair.
+    """
+    sigma = random.uniform(*_get_rng(sigma))
+    return _blur(x, sigma), y
+
+
+def _identity(x):
+    """
+    Identity function.
+    """
+    return x
+
 
 def identity(x, y):
-    return x, y
+    """
+    Wrapper for _identity for xy pair.
+    """
+    return _identity(x), _identity(y)
 
-def _unit_norm(img, minn, maxx, dtype="float32"):
-    img = ((img - minn)/max(maxx - minn, 1)).astype(dtype)
-    return img
 
-def _unit_denorm(img, minn, maxx, dtype="float32"):
-    img = (img*(maxx - minn) + minn).astype(dtype)
-    return img
+def _unit_norm(x, minn, maxx, dtype="float32", epslon=1e-6):
+    """
+    Unit normalization.
+    """
+    x = ((x - minn)/max(maxx - minn, epslon)).astype(dtype)
+    return x
 
-#mapping of strings to methods
+
+def _unit_denorm(x, minn, maxx, dtype="float32"):
+    """
+    Unit de-normalization.
+    """
+    x = (x*(maxx - minn) + minn).astype(dtype)
+    return x
+
+
+# mapping of strings to methods
 OPS_MAP = {
     "rot90": rot90,
     "rotation": rotation,
@@ -186,57 +270,41 @@ OPS_MAP = {
     "hmirr": hmirr,
 }
 
-def augment(xy, op_seqs, apply_on_y=False, add_iff_op=True):
+
+def augment(xy, operations, copy_xy=False):
     """
     Performs data augmentation on x, y sample.
 
     op_seqs is a list of sequences of operations.
-    Each sequence must be in format (op_name, op_prob, op_kwargs).
+    Each sequence must be in format (op_name, op_kwargs, op_prob).
     Example of valid op_seqs:
     [
-        [
-            ('identity', 1.0, {}),
-        ],
-        [
-            ('hmirr', 1.0, {}),
-            ('rot90', 1.0, {'reps': 3})
-        ],
-        [
-            ('rotation', 0.5, {'rng': (-10, 10)}),
-        ]
+        ('hmirr', {}, 0.5),
+        ('rot90', {'reps': 3}, 1.0)
+        ('rot90', {'reps': (1, 2)}, 0.3)
     ]
-    ('identity' is necessary to keep the original image in the returned list.)
+    The arguments might be a range (e.g. (-10, 10) for angle will produce
+    a uniformly random number between -10 and 10).
 
-    add_iff_op: adds image to augm list only if some operation happened.
+    Use copy_xy=True if you want to preserve original xy.
     """
-    #list of augmented images
-    augm = []
-
-    #pre-processing x, y for augmentation
     x, y = xy
+    if copy_xy:
+        x, y = x.copy(), y.copy()
+
+    # pre-processing x, y for augmentation
     x_minn, x_maxx, x_dtype = x.min(), x.max(), x.dtype
     x = _unit_norm(x, x_minn, x_maxx, "float32")
-    if apply_on_y:
-        y_minn, y_maxx, y_dtype = y.min(), y.max(), y.dtype
-        y = _unit_norm(y, y_minn, y_maxx, "float32")
+    y_minn, y_maxx, y_dtype = y.min(), y.max(), y.dtype
+    y = _unit_norm(y, y_minn, y_maxx, "float32")
 
-    #applying sequences
-    for op_seq in op_seqs:
-        _x, _y = x.copy(), y.copy() if apply_on_y else None
+    # randomly applying operations
+    for op_name, op_kwargs, op_prob in operations:
+        if random.uniform(0, 1) <= op_prob:
+            x, y = OPS_MAP[op_name](x, y, **op_kwargs)
 
-        some_op = False
-        #applying sequence of operations
-        for name, prob, kwargs in op_seq:
-            op = OPS_MAP[name]
-            if np.random.uniform(0.0, 1.0) <= prob:
-                some_op = True
-                _x, _y = op(_x, _y, **kwargs)
+    # de-processing
+    x = _unit_denorm(x, x_minn, x_maxx, x_dtype)
+    y = _unit_denorm(y, y_minn, y_maxx, y_dtype)
 
-        #adding sample to augm list
-        if some_op or not add_iff_op:
-            _x = _unit_denorm(_x, x_minn, x_maxx, x_dtype)
-            if apply_on_y:
-                _y = _unit_denorm(_y, y_minn, y_maxx, y_dtype)
-            augm.append((_x, _y if apply_on_y else y))
-
-    return augm
+    return x, y

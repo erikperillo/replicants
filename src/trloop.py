@@ -45,10 +45,7 @@ def _no_op(*args, **kwargs):
 def _dummy_load(fp):
     return random.randint(0, 10), random.randint(0, 10)
 
-def _dummy_augment(xy):
-    return [xy]
-
-def _dummy_pre_proc(xy):
+def _identity(xy):
     return xy
 
 def _inf_gen():
@@ -56,13 +53,6 @@ def _inf_gen():
     while True:
         yield n
         n += 1
-
-def _pop_rand_elem(lst):
-    if not lst:
-        return None
-    index = random.randint(0, len(lst)-1)
-    lst[-1], lst[index] = lst[index], lst[-1]
-    return lst.pop()
 
 def _str_fmt_time(seconds):
     int_seconds = int(seconds)
@@ -78,54 +68,30 @@ def _str_fmt_dct(dct):
     """Assumes dict mapping str to float."""
     return " | ".join("{}: {:.4g}".format(k, v) for k, v in dct.items())
 
-def fetch(fps, q, load_chunk_size, max_n_samples,
-    load_fn, augment_fn, pre_proc_fn):
+def fetch(paths, q, load_fn, augment_fn, pre_proc_fn):
     """
     Thread to load, pre-process and augment data, putting it into queue q.
     """
-    #list to store samples
-    samples = []
-
-    end = False
-    while not end:
-        if len(samples) < max_n_samples:
-            #loading load_chunk_size files before putting into queue.
-            #this is to better spread augmented samples
-            for __ in range(load_chunk_size):
-                if not fps:
-                    end = True
-                    break
-
-                #getting filepath
-                fp = fps.pop()
-                #loading x and y
-                xy = load_fn(fp)
-                #augmentation
-                augm_xy = augment_fn(xy)
-                #pre-processing
-                augm_xy = pre_proc_fn(augm_xy)
-                #putting to samples list
-                samples.extend(augm_xy)
-
-        #putting random sample into queue
-        if samples:
-            q.put(_pop_rand_elem(samples))
-
-    #putting remaining samples to queue
-    while samples:
-        q.put(_pop_rand_elem(samples))
+    for path in paths:
+        #loading x and y
+        xy = load_fn(path)
+        x, y = xy
+        #augmentation
+        xy = augment_fn(xy)
+        #pre-processing
+        xy = pre_proc_fn(xy)
+        #putting sample to queue
+        q.put(xy)
 
 def batch_gen(
-        filepaths,
+        paths,
         batch_size=1,
         n_threads=1,
         max_n_samples=None,
-        fetch_thr_load_chunk_size=1,
         fetch_thr_load_fn=_dummy_load,
-        fetch_thr_augment_fn=_dummy_augment,
-        fetch_thr_pre_proc_fn=_dummy_pre_proc,
-        max_augm_factor=1,
-        shuffle_fps=True):
+        fetch_thr_augment_fn=_identity,
+        fetch_thr_pre_proc_fn=_identity,
+        shuffle_paths=True):
 
     """
     Main thread for generation of batches.
@@ -133,32 +99,30 @@ def batch_gen(
         samples into batches and yielding them.
     """
     if max_n_samples is None:
-        max_n_samples = len(filepaths)*max_augm_factor
+        max_n_samples = len(paths)
 
     #shuffling filepaths
-    if shuffle_fps:
-        random.shuffle(filepaths)
+    if shuffle_paths:
+        random.shuffle(paths)
 
     #threads and thread queues
     threads = []
     qs = []
     #maximum number of samples per thread
-    max_n_samples_per_thr = math.ceil(
-        max_n_samples/(n_threads*fetch_thr_load_chunk_size*max_augm_factor))
+    max_n_samples_per_thr = math.ceil(max_n_samples/n_threads)
     #number of filepaths per thread
-    n_fps_per_thr = math.ceil(len(filepaths)/n_threads)
+    n_fps_per_thr = math.ceil(len(paths)/n_threads)
 
     #initializing thread objects
     for i in range(n_threads):
         #getting a slice of filepaths for thread
-        thr_fps = filepaths[i*n_fps_per_thr:(i+1)*n_fps_per_thr]
+        thr_fps = paths[i*n_fps_per_thr:(i+1)*n_fps_per_thr]
         #queue in which fetch thread will put its samples
-        thr_q = mp.Queue(maxsize=1)
+        thr_q = mp.Queue(maxsize=max_n_samples_per_thr)
         #process object
         thr = mp.Process(
             target=fetch,
             args=(thr_fps, thr_q,
-                fetch_thr_load_chunk_size, max_n_samples_per_thr,
                 fetch_thr_load_fn, fetch_thr_augment_fn, fetch_thr_pre_proc_fn))
 
         threads.append(thr)
@@ -188,6 +152,7 @@ def batch_gen(
             #trying to get sample from thread
             try:
                 xy = qs[i].get(block=False)
+                all_done = False
             except queue.Empty:
                 continue
 
@@ -265,8 +230,9 @@ def train_loop(
     val_set=None, val_fn=None, val_every_its=None, patience=None,
     log_every_its=None, log_fn=_no_op,
     save_model_fn=_no_op, save_every_its=None,
+    batch_gen_kw={},
     verbose=2, print_fn=print,
-    batch_gen_kw={}):
+    print_batch_metrics=False):
     """
     General Training loop.
     """
@@ -282,8 +248,7 @@ def train_loop(
     validation = val_set is not None and val_fn is not None
     #setting up validation batches_gen_kwargs
     val_batch_gen_kw = dict(batch_gen_kw)
-    val_batch_gen_kw["max_augm_factor"] = 1
-    val_batch_gen_kw["fetch_thr_augment_fn"] = _dummy_augment
+    val_batch_gen_kw["fetch_thr_augment_fn"] = _identity
 
     #batch generator for validation set
     if log_every_its is not None:
@@ -315,7 +280,6 @@ def train_loop(
         loss_sum = 0
         #estimating number of batches for train phase
         n_batches = len(train_set)//batch_gen_kw["batch_size"]
-        n_batches *= batch_gen_kw["max_augm_factor"]
 
         #main train loop
         for i, (bx, by) in enumerate(batch_gen(train_set, **batch_gen_kw)):
@@ -335,13 +299,15 @@ def train_loop(
                     val_gen = batch_gen(val_set, **val_batch_gen_kw)
                     val_bx, val_by = next(val_gen)
 
-                #uncomment this to print statistics on console
-                #metrics = val_fn(bx, by)
-                #print_("[batch {}] metrics (train): {}".format(
-                #    i+1, _str_fmt_dct(metrics)), 16*" ")
-                #metrics = val_fn(val_bx, val_by)
-                #print_("[batch {}] metrics (val): {}".format(
-                #    i+1, _str_fmt_dct(metrics)), 16*" ")
+                #print batch metrics
+                if print_batch_metrics:
+                    metrics = val_fn(bx, by)
+                    print_("[batch {}] metrics (train): {}".format(
+                        i+1, _str_fmt_dct(metrics)), 16*" ")
+                    metrics = val_fn(val_bx, val_by)
+                    print_("[batch {}] metrics (val): {}".format(
+                        i+1, _str_fmt_dct(metrics)), 16*" ")
+
                 log_fn(bx, by, its, train=True)
                 log_fn(val_bx, val_by, its, train=False)
 

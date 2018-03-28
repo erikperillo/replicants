@@ -48,11 +48,11 @@ def populate_out_dir(out_dir):
 
     #saving train/val filepaths
     with open(os.path.join(out_dir, "input", "train.csv"), "w") as f:
-        for fp in conf.train["train_set_fps"]:
+        for fp in conf.train["train_identifiers"]:
             print(fp, file=f)
 
     with open(os.path.join(out_dir, "input", "val.csv"), "w") as f:
-        for fp in conf.train["val_set_fps"]:
+        for fp in conf.train["val_identifiers"]:
             print(fp, file=f)
 
 def main():
@@ -78,17 +78,6 @@ def main():
 
     #tensorboard logging paths
     summ_dir = os.path.join(out_dir, "etc", "train-log", "summaries")
-    if conf.train["use_tensorboard"]:
-        #tensorboard summary writers
-        train_writer = tf.summary.FileWriter(
-            os.path.join(summ_dir, "train"), graph)
-        val_writer = tf.summary.FileWriter(
-            os.path.join(summ_dir, "val"), graph)
-        #running tensorboard
-        cmd = ["tensorboard", "--logdir={}".format(summ_dir),
-            "--port={}".format(conf.train["tensorboard_port"])]
-        log.print("[info] running '{}'".format(" ".join(cmd)))
-        proc = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE)
 
     #training session
     with tf.Session(graph=graph) as sess:
@@ -134,6 +123,17 @@ def main():
 
         #test
         if conf.train["use_tensorboard"]:
+            #tensorboard summary writers
+            train_writer = tf.summary.FileWriter(
+                os.path.join(summ_dir, "train"), graph=graph)
+            val_writer = tf.summary.FileWriter(
+                os.path.join(summ_dir, "val"), graph=graph)
+            #running tensorboard
+            cmd = ["tensorboard", "--logdir={}".format(summ_dir),
+                "--port={}".format(conf.train["tensorboard_port"])]
+            log.print("[info] running '{}'".format(" ".join(cmd)))
+            proc = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE)
+
             _log_fn = meta_model.get_summary_fn(sess)
             def log_fn(x, y_true, its, train=True):
                 summ = _log_fn(x, y_true)
@@ -152,10 +152,10 @@ def main():
         print("calling train loop")
         try:
             trloop.train_loop(
-                train_set=conf.train["train_set_fps"],
+                train_set=conf.train["train_identifiers"],
                 train_fn=train_fn,
                 n_epochs=conf.train["n_epochs"],
-                val_set=conf.train["val_set_fps"],
+                val_set=conf.train["val_identifiers"],
                 val_fn=test_fn,
                 val_every_its=conf.train["val_every_its"],
                 patience=conf.train["patience"],

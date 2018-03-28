@@ -41,109 +41,109 @@ import util
 def _unit_norm(x, eps=1e-6):
     return (x - x.min())/max(x.max() - x.min(), eps)
 
-def _load_salicon(fp_or_fps):
-    fn = os.path.basename(fp_or_fps)
-    dn = os.path.dirname(os.path.dirname(fp_or_fps))
-    x_fp = os.path.join(dn, "images", fn)
-    y_fp = os.path.join(dn, "maps", fn)
-    x = io.imread(x_fp)
-    y = io.imread(y_fp)
-    if x.ndim < 3:
-        x = np.dstack(3*(x, ))
-    x = x.swapaxes(2, 1).swapaxes(1, 0)
-    y = y.reshape((1, ) + y.shape)
-    return x, y
+def _std_norm(x, eps=1e-6):
+    return (x - x.mean())/max(x.std(), eps)
 
-def _load_judd(fp_or_fps):
-    fn = os.path.basename(fp_or_fps)
-    dn = os.path.dirname(os.path.dirname(fp_or_fps))
-    x_fp = os.path.join(dn, "stimuli", fn)
-    y_fp = glob.glob(os.path.join(dn, "fixmaps", fn.split(".")[0] + "*"))[0]
-    x = io.imread(x_fp)
-    y = io.imread(y_fp)
-    if x.ndim < 3:
-        x = np.dstack(3*(x, ))
-    x = x.swapaxes(2, 1).swapaxes(1, 0)
-    y = y.reshape((1, ) + y.shape)
-    return x, y
+def _hwc_to_chw(img):
+    if img.ndim < 3:
+        return img
+    return img.swapaxes(2, 1).swapaxes(1, 0)
 
-def train_load(fp):
-    #return _load_judd(fp)
-    return _load_salicon(fp)
+def _chw_to_hwc(img):
+    if img.ndim < 3:
+        return img
+    return img.swapaxes(0, 1).swapaxes(1, 2)
 
-def infer_load(fp):
-    #return _load_judd(fp)
-    return _load_judd(fp)
+def _gray_to_rgb(img):
+    """assumes img in shape channels, height, width"""
+    if img.shape[0] == 3:
+        return img
+    return np.concatenate(3*(img, ), axis=0)
 
-def _pre_proc(x, y=None, resize=False):
-    x = x.swapaxes(0, 1).swapaxes(1, 2)
-    #converting images to float
-    x = img_as_float(x)
+def _load(path):
+    # loading image
+    img = io.imread(path)
+    # setting up three dimensions if needed
+    if img.ndim < 3:
+        img = img.reshape(img.shape + (1, ))
+    # converting from height, width, channels to channels, height, width
+    img = _hwc_to_chw(img)
+    return img
 
-    if y is not None:
-        y = y.swapaxes(0, 1).swapaxes(1, 2)
-        y = img_as_float(y)
-
-    #reshaping to fix max input shape if necessary
-    h, w = x.shape[:2]
-    max_h, max_w = (240, 320)
-    max_ratio = max(h/max_h, w/max_w)
-    if resize:
-        x = transf.resize(x, (max_h, max_w), mode="constant")
-        if y is not None:
-            y = transf.resize(y, (max_h, max_w), mode="constant")
-    elif max_ratio > 1.0:
-        x = transf.rescale(x, 1/max_ratio, mode="constant")
-        if y is not None:
-            y = transf.rescale(y, 1/max_ratio, mode="constant")
-
-    #converting x colorspace to LAB
-    x = color.rgb2lab(x)
-
-    #preparing shapes to be divisable by 2^3
-    h, w = x.shape[:2]
-    x = x[h%8:, w%8:]
-    if y is not None:
-        y = y[h%8:, w%8:]
-        #reshaping y
-        y = transf.resize(y, (h//8, w//8), mode="constant")
-        #normalizing y
-        y = _unit_norm(y)
-
-    #normalizing each x channel
-    for i in range(3):
-        x[..., i] = (x[..., i] - x[..., i].mean())/x[..., i].std()
-
-    x = x.swapaxes(2, 1).swapaxes(1, 0).astype("float32")
-    if y is not None:
-        y = y.swapaxes(2, 1).swapaxes(1, 0).astype("float32")
-
-    if y is not None:
-        return x, y
+def load_x(identifier, x_dir):
+    #getting x path
+    paths = glob.glob(os.path.join(x_dir, "{}.*".format(identifier)))
+    assert len(paths) == 1
+    path = paths[0]
+    # loading x
+    x = _load(path)
+    # converting to rgb if needed
+    if x.shape[0] == 1:
+        x = _gray_to_rgb(x)
     return x
 
-def train_pre_proc(batch_xy):
-    for i, xy in enumerate(batch_xy):
-        batch_xy[i] = _pre_proc(*xy, resize=True)
-    return batch_xy
+def load_y(identifier, y_dir):
+    #getting y path
+    paths = glob.glob(os.path.join(y_dir, "{}.*".format(identifier)))
+    assert len(paths) == 1
+    path = paths[0]
+    # loading y
+    y = _load(path)
+    return y
 
-def infer_pre_proc(x):
-    return _pre_proc(x, resize=False)
+def load_xy(identifier, x_dir, y_dir):
+    x = load_x(identifier, x_dir)
+    y = load_y(identifier, y_dir)
+    return x, y
+
+def pre_proc_x(x, shape):
+    """
+    assumes x in format channels, height, width
+    """
+    # converting to height, width, channels
+    x = _chw_to_hwc(x)
+    # converting image to float
+    x = img_as_float(x)
+    # reshaping to shape
+    if x.shape[:2] != shape:
+        x = transf.resize(x, shape, mode="constant")
+    # converting x colorspace to LAB
+    x = color.rgb2lab(x)
+    # std-normalizing each x channel
+    for i in range(3):
+        x[..., i] = _std_norm(x[..., i])
+    # converting back to channels, height, width
+    x = _hwc_to_chw(x)
+    return x
+
+def pre_proc_y(y, shape):
+    """
+    assumes y in format channels, height, width
+    """
+    # converting to height, width, channels
+    y = _chw_to_hwc(y)
+    # converting image to float
+    y = img_as_float(y)
+    # reshaping to shape
+    if y.shape[:2] != shape:
+        y = transf.resize(y, shape, mode="constant")
+    # unit-normalizing
+    y = _unit_norm(y)
+    # converting back to channels, height, width
+    y = _hwc_to_chw(y)
+    return y
+
+def pre_proc_xy(xy, x_shape, y_shape):
+    x, y = xy
+    x = pre_proc_x(x, x_shape)
+    y = pre_proc_y(y, y_shape)
+    return x, y
 
 def infer_save_x(x, preds_dir, name):
-    fp = util.uniq_path(preds_dir, name + "_x", ext=".png")
-    x = np.moveaxis(x, 0, -1)
-    print("x shp...", x.shape)
-    io.imsave(fp, x.clip(0, 255).astype("uint8"))
+    return
 
 def infer_save_y_pred(y_pred, preds_dir, name):
-    fp = util.uniq_path(preds_dir, name + "_y-pred", ext=".png")
-    y_pred = transf.rescale(y_pred, 8, mode="constant")
-    y_pred = 255*_unit_norm(y_pred)
-    io.imsave(fp, y_pred.clip(0, 255).astype("uint8"))
+    return
 
 def infer_save_y_true(y_true, preds_dir, name):
-    fp = util.uniq_path(preds_dir, name + "_y-true", ext=".png")
-    y_true = 255*_unit_norm(y_true)
-    y_true = y_true.reshape(y_true.shape[1:])
-    io.imsave(fp, y_true.clip(0, 255).astype("uint8"))
+    return

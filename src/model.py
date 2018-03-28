@@ -78,42 +78,133 @@ def _var_summaries(var):
         tf.summary.scalar("min", tf.reduce_min(var))
         tf.summary.histogram("histogram", var)
 
-def _conv(net, *args, **kwargs):
-    """
-    Convolution filter.
-    """
-    return tf.layers.conv2d(net, *args, **kwargs)
+def conv(net, *args, **kwargs):
+    with tf.name_scope("conv"):
+        net = tf.layers.conv2d(net, *args, **kwargs)
+    return net
 
-def _max_pool(net, *args, **kwargs):
-    return tf.layers.max_pooling2d(net, *args, **kwargs)
+def upconv(net, *args, **kwargs):
+    with tf.name_scope("upconv"):
+        net = tf.layers.conv2d_transpose(net, *args, **kwargs)
+    return net
 
-def _inception(
-        net, pool_red, conv1x1, conv3x3_red, conv3x3, conv5x5_red, conv5x5):
-    """
-    Inception layer.
-    """
-    pool_layer = _max_pool(net,
-        pool_size=(2, 2), strides=(1, 1), padding="same")
-    pool_layer = _conv(pool_layer, filters=pool_red,
-        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+def max_pool(net, *args, **kwargs):
+    with tf.name_scope("max_pool"):
+        net = tf.layers.max_pooling2d(net, *args, **kwargs)
+    return net
 
-    conv1x1_layer = _conv(net, filters=conv1x1,
-        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
+def batch_norm(net, *args, **kwargs):
+    with tf.name_scope("batch_norm"):
+        net = tf.layers.batch_normalization(net, *args, **kwargs)
+    return net
 
-    conv3x3_layer = _conv(net, filters=conv3x3_red,
-        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
-    conv3x3_layer = _conv(conv3x3_layer, filters=conv3x3,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+def concat(net_a, net_b):
+    with tf.name_scope("concat"):
+        net = tf.concat([net_a, net_b], axis=-1)
+    return net
 
-    conv5x5_layer = _conv(net, filters=conv5x5_red,
-        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
-    conv5x5_layer = _conv(conv5x5_layer, filters=conv5x5,
-        kernel_size=(5, 5), activation=tf.nn.relu, padding="same")
+def batch_norm_conv(net, training, *args, **kwargs):
+    with tf.name_scope("batch_norm-conv"):
+        net = batch_norm(net, training=training)
+        net = conv(net, *args, **kwargs)
+    return net
 
-    concat_layer = tf.concat(
-        [pool_layer, conv1x1_layer, conv3x3_layer, conv5x5_layer], axis=-1)
+def batch_norm_upconv(net, training, *args, **kwargs):
+    with tf.name_scope("batch_norm-upconv"):
+        net = batch_norm(net, training=training)
+        net = upconv(net, *args, **kwargs)
+    return net
 
-    return concat_layer
+def unet_input_block(net, n_filters, training):
+    with tf.name_scope("input_block"):
+        #first layer without batch norm
+        net = conv(net, filters=n_filters[0],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #second layer, saving output to be returned
+        net = batch_norm_conv(net, training, filters=n_filters[1],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        middle_block = net
+        #third layer
+        net = batch_norm_conv(net, training, filters=n_filters[2],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #downsampling with maxpool
+        net = max_pool(net, pool_size=(2, 2), strides=(2, 2))
+    return net, middle_block
+
+def unet_block_downsample(net, n_filters, training):
+    with tf.name_scope("block_downsample"):
+        #first layer
+        net = batch_norm_conv(net, training, filters=n_filters[0],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #second layer, saving output to be returned
+        net = batch_norm_conv(net, training, filters=n_filters[1],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        middle_block = net
+        #third layer
+        net = batch_norm_conv(net, training, filters=n_filters[2],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #downsampling with maxpool
+        net = max_pool(net, pool_size=(2, 2), strides=(2, 2))
+    return net, middle_block
+
+def unet_block_upsample(net, n_filters, training):
+    with tf.name_scope("block_upsample"):
+        #first layer
+        net = batch_norm_conv(net, training, filters=n_filters[0],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #second layer
+        net = batch_norm_conv(net, training, filters=n_filters[1],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #third layer, transposed convolution
+        net = batch_norm_upconv(net, training, filters=n_filters[2],
+            kernel_size=(3, 3), strides=(2, 2), activation=tf.nn.relu,
+            padding="same")
+    return net
+
+def unet_output_block(net, n_filters, training, last_activation=None):
+    with tf.name_scope("output_block"):
+        #first layer
+        net = batch_norm_conv(net, training, filters=n_filters[0],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #second layer
+        net = batch_norm_conv(net, training, filters=n_filters[1],
+            kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
+        #third layer, linear combination with maybe sigmoid
+        net = conv(net, filters=1,
+            kernel_size=(1, 1), activation=last_activation, padding="same")
+    return net
+
+def unet(net, training, name="unet"):
+    with tf.name_scope(name):
+        #downsampling blocks
+        #input
+        net, middle_block_1 = unet_input_block(net,
+            [32, 32, 32], training)
+        net, middle_block_2 = unet_block_downsample(net,
+            [48, 48, 48], training)
+        net, middle_block_3 = unet_block_downsample(net,
+            [64, 64, 64], training)
+        net, middle_block_4 = unet_block_downsample(net,
+            [96, 96, 96], training)
+        net, middle_block_5 = unet_block_downsample(net,
+            [128, 128, 128], training)
+
+        #upsampling blocks
+        net = concat(unet_block_upsample(net, [180, 180, 180], training),
+            middle_block_5)
+        net = concat(unet_block_upsample(net, [128, 128, 128], training),
+            middle_block_4)
+        net = concat(unet_block_upsample(net, [96, 96, 96], training),
+            middle_block_3)
+        net = concat(unet_block_upsample(net, [64, 64, 64], training),
+            middle_block_2)
+        net = concat(unet_block_upsample(net, [48, 48, 48], training),
+            middle_block_1)
+
+        #output
+        net = unet_output_block(net, [32, 32], training, tf.nn.relu)
+
+    return net
 
 def _build_graph():
     """
@@ -135,50 +226,8 @@ def _build_graph():
     #learning phase
     params["learning_phase"] = tf.placeholder("bool")
 
-    #building net
-    net = x
-
-    #first layer
-    net = _conv(net, filters=48,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _max_pool(net,
-        pool_size=(2, 2), strides=(2, 2))
-
-    #second layer
-    net = _conv(net, filters=64,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _conv(net, filters=96,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _max_pool(net,
-        pool_size=(2, 2), strides=(2, 2))
-
-    #third layer
-    net = _conv(net, filters=128,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _conv(net, filters=128,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _conv(net, filters=144,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _conv(net, filters=144,
-        kernel_size=(3, 3), activation=tf.nn.relu, padding="same")
-    net = _max_pool(net,
-        pool_size=(2, 2), strides=(2, 2))
-
-    #fourth layer
-    net = _inception(net, 96, 128, 96, 192, 48, 96)
-    net = _inception(net, 64, 128, 80, 160, 24, 48)
-    net = _inception(net, 64, 128, 80, 160, 24, 48)
-    net = _inception(net, 64, 128, 96, 192, 28, 56)
-    net = _inception(net, 64, 128, 96, 192, 28, 56)
-    net = _inception(net, 64, 128, 112, 224, 32, 64)
-    net = _inception(net, 64, 128, 112, 224, 32, 64)
-    net = _inception(net, 112, 160, 128, 256, 40, 80)
-
-    #last layer
-    net = _conv(net, filters=1,
-        kernel_size=(1, 1), activation=tf.nn.relu, padding="same")
     #net = unit_norm(net)
-    y_pred = net
+    y_pred = unet(x, training=params["learning_phase"])
 
     #counting number of params
     print("n. params: {}".format(
@@ -280,6 +329,8 @@ class MetaModel:
                     self.params["y_true"], [0, 2, 3, 1]), max_outputs=4)
             tf.summary.image("pred", tf.transpose(
                     self.params["y_pred"], [0, 2, 3, 1]), max_outputs=4)
+            tf.summary.image("x", tf.transpose(
+                    self.params["x"], [0, 2, 3, 1]), max_outputs=4)
 
         #other params summaries
         for k in {"x", "y_pred", "y_true"}:
